@@ -2,6 +2,10 @@ from .secrets import mqtt_password, mqtt_server, mqtt_user, password, ssid
 
 timezone_offset = 2
 wifi_connect_timeout = 10
+wifi_connect_retries = 3
+ntp_timeout = 3
+# Set to an IP to avoid DNS-related blocking on some networks, e.g. "129.6.15.28"
+ntp_host = None
 
 # Application-specific configuration
 # Student identifier used in MQTT topic namespace
@@ -13,7 +17,7 @@ MQTT_TOPIC_PREFIX = "lnu/iot"
 
 # Sensor / publishing
 SENSOR_PUBLISH_INTERVAL = 15  # seconds between published sensor readings
-DHT_PIN = 11
+DHT_PIN = 0
 
 # Computed defaults (can be overridden by code if needed)
 SENSOR_TOPIC = f"{MQTT_TOPIC_PREFIX}/{STUDENT_ID}/sensor"

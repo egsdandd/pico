@@ -22,7 +22,13 @@ def _get_wlan():
     return wlan
 
 def connect(ssid=None, password=None, timeout=None):
-    wlan = _get_wlan()
+    # Use the WLAN interface but avoid forcing a re-init if already active.
+    wlan = network.WLAN(network.STA_IF)
+    activated_here = False
+    if not wlan.active():
+        wlan.active(True)
+        activated_here = True
+        time.sleep_ms(150)  # allow radio firmware to initialize
     target_ssid = ssid or config.ssid
     target_password = password or config.password
     connect_timeout = timeout if timeout is not None else getattr(config, "wifi_connect_timeout", 20)
@@ -32,24 +38,41 @@ def connect(ssid=None, password=None, timeout=None):
         return True
 
     print("Connecting to network {}...".format(target_ssid))
-    wlan.connect(target_ssid, target_password)
+    try:
+        wlan.connect(target_ssid, target_password)
 
-    start_time = time.time()
-    last_status = None
-    while not wlan.isconnected():
-        current_status = wlan.status()
-        if current_status != last_status:
-            print("Wi-Fi status:", _status_name(current_status))
-            last_status = current_status
+        start_time = time.time()
+        last_status = None
+        while not wlan.isconnected():
+            current_status = wlan.status()
+            if current_status != last_status:
+                print("Wi-Fi status:", _status_name(current_status))
+                last_status = current_status
 
-        if time.time() - start_time > connect_timeout:
-            raise OSError(
-                "Wi-Fi connection timeout for SSID '{}' (status={})".format(
-                    target_ssid,
-                    _status_name(wlan.status()),
+            # If we get a definitive immediate failure, abort early
+            if current_status in (getattr(network, "STAT_WRONG_PASSWORD", None),
+                                  getattr(network, "STAT_NO_AP_FOUND", None),
+                                  getattr(network, "STAT_CONNECT_FAIL", None)):
+                raise OSError("Wi-Fi connect failed (status={})".format(_status_name(current_status)))
+
+            if time.time() - start_time > connect_timeout:
+                raise OSError(
+                    "Wi-Fi connection timeout for SSID '{}' (status={})".format(
+                        target_ssid,
+                        _status_name(wlan.status()),
+                    )
                 )
-            )
-        time.sleep(0.1)
+            time.sleep(0.25)
+
+    except Exception:
+        # If we activated the radio for this attempt, try to power it down to leave hardware in a clean state
+        try:
+            if activated_here:
+                wlan.active(False)
+                time.sleep_ms(50)
+        except Exception:
+            pass
+        raise
 
     print("Connected to Wi-Fi:", wlan.ifconfig())
     return True
@@ -63,15 +86,31 @@ def disconnect():
     wlan = _get_wlan()
     if wlan.isconnected():
         print("Disconnecting from Wi-Fi...")
-        wlan.disconnect()
+        try:
+            wlan.disconnect()
+        except Exception as exc:
+            print("Error during wlan.disconnect():", exc)
         time.sleep(1)
         if wlan.isconnected():
-            print("Disconnect failed, resetting device.")
-            machine.reset()
+            # Try a gentler recovery: attempt to deactivate the radio and log the failure.
+            print("Disconnect failed; attempting to power down radio instead of resetting.")
+            try:
+                wlan.active(False)
+                time.sleep_ms(50)
+            except Exception as exc:
+                print("Failed to deactivate radio:", exc)
+            if wlan.isconnected():
+                print("Still connected after deactivate attempt.")
+                return False
+            else:
+                print("Radio deactivated; treated as disconnected.")
+                return True
         else:
             print("Wi-Fi disconnected.")
+            return True
     else:
         print("Not connected to Wi-Fi.")
+        return False
 
 
 def is_connected():

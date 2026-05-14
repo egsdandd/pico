@@ -110,13 +110,94 @@ class _FallbackMQTTClient:
         self.sock.send(packet)
 
     def subscribe(self, topic, qos=0):
-        raise NotImplementedError("Fallback client does not support subscribe")
+        # Build SUBSCRIBE packet (packet id 1)
+        if isinstance(topic, str):
+            topic = topic.encode("utf-8")
+        packet_id = 1
+        variable_header = packet_id.to_bytes(2, "big")
+        payload = len(topic).to_bytes(2, "big") + topic + bytes([qos & 0x03])
+        remaining_length = len(variable_header) + len(payload)
+        packet = b"\x82" + _encode_remaining_length(remaining_length) + variable_header + payload
+        if self.sock is None:
+            raise OSError("MQTT socket is not connected")
+        self.sock.send(packet)
 
     def set_callback(self, callback):
         self.callback = callback
 
     def check_msg(self):
-        pass
+        # Try to non-blocking read incoming PUBLISH messages and call callback(topic, msg)
+        if getattr(self, "sock", None) is None:
+            return
+        sock = self.sock
+        # Use a small timeout for non-blocking behavior
+        orig_timeout = None
+        try:
+            if hasattr(sock, "gettimeout"):
+                orig_timeout = sock.gettimeout()
+            if hasattr(sock, "settimeout"):
+                sock.settimeout(0.01)
+            # Read first byte of fixed header
+            try:
+                hdr = sock.recv(1)
+            except Exception:
+                return
+            if not hdr:
+                return
+            packet_type = hdr[0] >> 4
+            # Decode remaining length
+            mul = 1
+            remaining = 0
+            while True:
+                b = sock.recv(1)
+                if not b:
+                    return
+                val = b[0]
+                remaining += (val & 127) * mul
+                mul *= 128
+                if (val & 128) == 0:
+                    break
+
+            body = b""
+            to_read = remaining
+            while to_read > 0:
+                chunk = sock.recv(to_read)
+                if not chunk:
+                    break
+                body += chunk
+                to_read -= len(chunk)
+
+            # If it's a PUBLISH (packet_type == 3), parse topic and payload
+            if packet_type == 3 and body:
+                # topic length
+                if len(body) < 2:
+                    return
+                topic_len = int.from_bytes(body[0:2], "big")
+                if len(body) < 2 + topic_len:
+                    return
+                topic = body[2:2 + topic_len].decode("utf-8")
+                payload = body[2 + topic_len:]
+                if hasattr(self, "callback") and callable(getattr(self, "callback")):
+                    try:
+                        self.callback(topic, payload)
+                    except Exception:
+                        pass
+
+        finally:
+            try:
+                if hasattr(sock, "settimeout") and orig_timeout is not None:
+                    sock.settimeout(orig_timeout)
+            except Exception:
+                pass
+
+    def disconnect(self):
+        """Close the underlying socket if open."""
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
 
 
 def subscribe(client, topic, qos=0):
@@ -141,6 +222,16 @@ def check_msg(client):
         client.check_msg()
     except AttributeError:
         pass
+
+
+def disconnect(client):
+    """Disconnect the given MQTT client if it supports disconnect()."""
+    try:
+        client.disconnect()
+    except AttributeError:
+        pass
+    except Exception as exc:
+        print("Error while disconnecting MQTT client:", exc)
 
 
 def create_client(client_id, server=None, user=None, password=None, port=1883, keepalive=60):
