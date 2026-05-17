@@ -5,14 +5,17 @@ MicroPython project for Raspberry Pi Pico W that:
 - connects to Wi-Fi,
 - synchronizes time with NTP,
 - reads temperature and humidity from a DHT11 sensor,
-- publishes sensor data to an MQTT topic,
-- listens for LED commands over MQTT.
+- publishes sensor data to an MQTT topic (when available),
+- listens for LED commands over MQTT (when available),
+- gracefully handles MQTT unavailability - continues sensing without publishing.
 
 ## Features
 
-- Periodic sensor read and publish loop
+- Periodic sensor read and publish loop (5s poll / 15s publish)
 - MQTT publish to sensor topic
 - MQTT subscribe for command-driven onboard LED control (`on`, `off`, `toggle`)
+- MQTT keep-alive ping every 30 seconds
+- Automatic reconnection attempts for Wi-Fi and MQTT
 - Runtime configuration output (without printing secret values)
 - Modular structure (`wifi`, `time sync`, `sensor`, `mqtt`, `device service`)
 
@@ -87,6 +90,8 @@ Example with `mpremote` from your PC:
 python -m mpremote connect COM3 run main.py
 ```
 
+**Note:** The Pico will run continuously even if MQTT is unavailable, logging sensor data to the console. When MQTT comes back online, it automatically reconnects.
+
 ## Troubleshooting
 
 ### `ImportError: no module named 'umqtt'`
@@ -103,6 +108,14 @@ machine.reset()
 ### `AssertionError: Subscribe callback is not set`
 
 Ensure callback is registered before `subscribe` (already handled in current `src/device_service.py`).
+
+### MQTT connection failures (`ECONNRESET`, timeouts)
+
+If MQTT broker is unavailable, the Pico will continue operating in offline mode:
+- Sensor readings continue every 5 seconds
+- Data is logged to console but not published
+- The Pico automatically attempts reconnection every 10 seconds
+- When MQTT comes back online, it reconnects and resumes publishing
 
 ## Security Notes
 
