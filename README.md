@@ -19,6 +19,16 @@ MicroPython project for Raspberry Pi Pico W that:
 - Runtime configuration output (without printing secret values)
 - Modular structure (`wifi`, `time sync`, `sensor`, `mqtt`, `device service`)
 
+### HTTP Web UI
+
+- The Pico W runs a small non-blocking HTTP server on port 80 that serves a simple
+  web page with buttons to control the onboard LED (`Turn LED On`, `Turn LED Off`, `Toggle LED`).
+- The web page displays the latest sensor measurement (temperature and humidity) and the
+  timestamp used in the published MQTT packet. The page is re-rendered on each request,
+  so opening the page or pressing a button will show the most recent value.
+- The HTTP server is non-blocking and integrated into the main device loop so it
+  doesn't interfere with sensor polling or MQTT handling.
+
 ## Tech Stack
 
 - MicroPython (Raspberry Pi Pico W)
@@ -112,6 +122,7 @@ Ensure callback is registered before `subscribe` (already handled in current `sr
 ### MQTT connection failures (`ECONNRESET`, timeouts)
 
 If MQTT broker is unavailable, the Pico will continue operating in offline mode:
+
 - Sensor readings continue every 5 seconds
 - Data is logged to console but not published
 - The Pico automatically attempts reconnection every 10 seconds

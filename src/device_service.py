@@ -22,6 +22,7 @@ from .mqtt_client import (
 )
 from .time_sync import format_local_time, sync_ntp_utc_time
 from .wifi_manager import do_connect
+from . import http_server
 
 
 def _connect_wifi():
@@ -156,6 +157,12 @@ def publish_sensor_data_loop(dht_sensor, mqtt_client):
         if current_time - last_connection_check_time >= 10:
             mqtt_client = _ensure_connections(mqtt_client)
             last_connection_check_time = current_time
+        
+        # 1.5 Hantera inkommande HTTP-requests (non-blocking)
+        try:
+            http_server.handle_http_requests()
+        except Exception as exc:
+            print(f"Error handling HTTP request: {exc}")
 
         # 2. Lyssna efter inkommande LED-kommandon (körs snabbt varje varv)
         if mqtt_client is not None:
@@ -186,18 +193,27 @@ def publish_sensor_data_loop(dht_sensor, mqtt_client):
 
         # 4. Publicera data till mäklaren baserat på SENSOR_PUBLISH_INTERVAL
         if latest_data and current_time - last_publish_time >= SENSOR_PUBLISH_INTERVAL:
+            packet_timestamp = int(current_time)
+            packet_local_time = format_local_time(packet_timestamp, timezone_offset)
+            http_server.update_latest_measurement(
+                latest_data["temperature"],
+                latest_data["humidity"],
+                timestamp=packet_timestamp,
+                local_time=packet_local_time,
+            )
+
             if mqtt_client is not None:
                 try:
                     payload = json.dumps(
                         {
                             "temperature": latest_data["temperature"],
                             "humidity": latest_data["humidity"],
-                            "timestamp": int(current_time),
+                            "timestamp": packet_timestamp,
                         }
                     )
                     mqtt_client.publish(SENSOR_TOPIC, payload)
                     print(f"Published to {SENSOR_TOPIC}: {payload}")
-                    print(f"Local publish time: {format_local_time(int(current_time), timezone_offset)}")
+                    print(f"Local publish time: {packet_local_time}")
                     last_publish_time = current_time
                 except Exception as exc:
                     print(f"MQTT publish failed: {exc}")
@@ -208,6 +224,7 @@ def publish_sensor_data_loop(dht_sensor, mqtt_client):
                 last_publish_time = current_time  # Förhindrar logg-spamming i offline-läge
 
         # Behåll denna kort (0.05) för att Picon ska höra LED-kommandona direkt när de skickas
+        http_server.report_idle_time(50)
         sleep(0.05)
 
 
@@ -222,6 +239,9 @@ def run():
         sync_ntp_utc_time(timezone_offset)
     except Exception as exc:
         print(f"Initial time sync failed: {exc}")
+
+    # Starta HTTP-servern
+    http_server.initialize_server(port=80)
 
     # Starta tjänsterna
     dht_sensor = initialize_dht_sensor()
