@@ -40,17 +40,21 @@ MicroPython project for Raspberry Pi Pico W that:
 ```text
 .
 |-- main.py
+|-- lib/
+|   |-- ssl.mpy
+|   `-- umqtt/
+|       `-- simple.mpy
 |-- src/
 |   |-- config.py
 |   |-- device_service.py
 |   |-- dht_sensor.py
+|   |-- http_server.py
 |   |-- led_control.py
 |   |-- mqtt_client.py
 |   |-- secrets.py
 |   |-- time_sync.py
 |   |-- wifi_manager.py
 |   `-- __init__.py
-`-- test_import.py
 ```
 
 ## Configuration
