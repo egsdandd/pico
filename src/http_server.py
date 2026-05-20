@@ -1,7 +1,8 @@
 import socket
 import gc
+import machine
 from time import sleep_ms, ticks_ms, ticks_diff
-from . import led_control
+from src import led_control
 
 # Global server socket och konfiguration
 _server_socket = None
@@ -13,7 +14,7 @@ _last_cpu_check = ticks_ms()
 _idle_ticks = 0
 _cpu_load = 0
 
-# Enkel HTML-mall med platshållare för sensorvärden och systemstatus
+# HTML-mall uppdaterad med "/pico/" i länkarna för att fungera bakom din Nginx-reverse proxy
 _HTML_BODY_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
@@ -60,6 +61,12 @@ _HTML_BODY_TEMPLATE = """<!DOCTYPE html>
         .toggle-button:hover {
             background-color: #0b7dda;
         }
+        .reset-button {
+            background-color: #FF9800;
+        }
+        .reset-button:hover {
+            background-color: #E68900;
+        }
         .status {
             margin-top: 20px;
             padding: 10px;
@@ -71,9 +78,10 @@ _HTML_BODY_TEMPLATE = """<!DOCTYPE html>
 <body>
     <h1>Pico W LED Control</h1>
     <div class="button-group">
-        <a href="/led/on"><button class="on-button">Turn LED On</button></a>
-        <a href="/led/off"><button class="off-button">Turn LED Off</button></a>
-        <a href="/led/toggle"><button class="toggle-button">Toggle LED</button></a>
+        <a href="led/on"><button class="on-button">Turn LED On</button></a>
+        <a href="led/off"><button class="off-button">Turn LED Off</button></a>
+        <a href="led/toggle"><button class="toggle-button">Toggle LED</button></a>
+        <a href="reset"><button class="reset-button" onclick="return confirm('Are you sure you want to reset the Pico?')">Reset Pico</button></a>
     </div>
     <div class="status">
         <p>Click a button to control the LED.</p>
@@ -98,10 +106,9 @@ def _calculate_cpu_and_mem():
     now = ticks_ms()
     total_elapsed = ticks_diff(now, _last_cpu_check)
     
-    if total_elapsed >= 2000:  # Uppdatera bara mätningen varannan sekund
+    if total_elapsed >= 2000:  # Uppdatera mätningen varannan sekund
         if total_elapsed > 0:
             active_time = total_elapsed - _idle_ticks
-            # Säkra att vi hamnar mellan 0% och 100%
             _cpu_load = max(0, min(100, int((active_time / total_elapsed) * 100)))
         
         # Återställ inför nästa mätperiod
@@ -109,7 +116,7 @@ def _calculate_cpu_and_mem():
         _idle_ticks = 0
         
     # 2. Hämta RAM-minne (omvandlat till Kilobytes)
-    gc.collect()  # Tvinga städning för att få en rättvisande bild av ledigt minne
+    gc.collect()  # Tvinga städning för en rättvisande bild av ledigt minne
     mem_free = gc.mem_free() // 1024
     mem_alloc = gc.mem_alloc() // 1024
     mem_total = mem_free + mem_alloc
@@ -163,8 +170,8 @@ def _build_http_response(body):
     return header.encode('utf-8') + body_bytes
 
 
-def _read_request(conn, max_attempts=10, wait_ms=10):
-    """Läser en HTTP-request från non-blocking socket och returnerar text eller tom sträng."""
+def _read_request(conn, max_attempts=20, wait_ms=5):
+    """Läser HTTP-request non-blocking och avbryter så fort headern är komplett (bra för Nginx)."""
     request = b""
     attempts = 0
 
@@ -174,7 +181,12 @@ def _read_request(conn, max_attempts=10, wait_ms=10):
             if not chunk:
                 break
             request += chunk
-            attempts = 0
+            attempts = 0  # Nollställ försök då vi faktiskt läste data
+            
+            # HTTP-headers slutar alltid med en tom rad (\r\n\r\n eller \n\n)
+            if b"\r\n\r\n" in request or b"\n\n" in request:
+                break
+                
         except OSError as exc:
             if getattr(exc, "errno", None) == _EAGAIN:
                 attempts += 1
@@ -185,7 +197,6 @@ def _read_request(conn, max_attempts=10, wait_ms=10):
     if not request:
         return ""
 
-    # Tar bort keyword-argumentet 'errors' då MicroPython inte stöder det i alla releaser
     return request.decode('utf-8')
 
 
@@ -216,24 +227,33 @@ def handle_http_requests():
     
     try:
         conn, addr = _server_socket.accept()
-        conn.setblocking(0)  # 0 istället för False för att undvika Keyword-felet
+        conn.setblocking(0)
 
         try:
             request = _read_request(conn)
 
             if not request:
+                conn.close()
                 return
 
-            # Hantera LED-kommandon baserat på URL
-            if '/led/on' in request:
+            # FIXEN: Dela upp requesten och titta BARA på den absolut första raden (t.ex. "GET /led/on HTTP/1.1")
+            request_lines = request.split('\r\n')
+            if not request_lines or request_lines[0] == '':
+                request_lines = request.split('\n') # Fallback för enkla radbrytningar
+            
+            first_line = request_lines[0] if request_lines else ""
+            print(f"Incoming URL line: {first_line}") # Bra för felsökning i Thonny!
+
+            # Hantera LED-kommandon baserat ENBART på den första raden
+            if '/led/on' in first_line:
                 led_control.turn_on()
-                print("LED ON via HTTP")
-            elif '/led/off' in request:
+                print("LED ON via HTTP/Proxy")
+            elif '/led/off' in first_line:
                 led_control.turn_off()
-                print("LED OFF via HTTP")
-            elif '/led/toggle' in request:
+                print("LED OFF via HTTP/Proxy")
+            elif '/led/toggle' in first_line:
                 led_control.toggle()
-                print("LED TOGGLE via HTTP")
+                print("LED TOGGLE via HTTP/Proxy")
 
             response = _build_http_response(_render_html_body())
             conn.sendall(response)
@@ -244,7 +264,7 @@ def handle_http_requests():
         except Exception as e:
             print(f"HTTP request error: {e}")
             import traceback
-            traceback.print_exc()  # Visar exakt radnummer i konsolen om något ändå skulle krascha
+            traceback.print_exc()
         finally:
             try:
                 conn.close()
@@ -252,12 +272,10 @@ def handle_http_requests():
                 pass
 
     except OSError as e:
-        # Ingen connection väntande - helt normalt för non-blocking socket
         if getattr(e, "errno", None) != _EAGAIN:
             print(f"HTTP server socket error: {e}")
     except Exception as e:
         print(f"HTTP server error: {e}")
-
 
 def shutdown_server():
     """Stäng ner HTTP-servern."""
