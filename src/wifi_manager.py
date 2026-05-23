@@ -34,20 +34,14 @@ def connect(ssid=None, password=None, timeout=None):
     connect_timeout = timeout if timeout is not None else getattr(config, "wifi_connect_timeout", 20)
 
     if wlan.isconnected():
-        print("Already connected to Wi-Fi:", wlan.ifconfig())
         return True
 
-    print("Connecting to network {}...".format(target_ssid))
     try:
         wlan.connect(target_ssid, target_password)
 
         start_time = time.time()
-        last_status = None
         while not wlan.isconnected():
             current_status = wlan.status()
-            if current_status != last_status:
-                print("Wi-Fi status:", _status_name(current_status))
-                last_status = current_status
 
             # If we get a definitive immediate failure, abort early
             if current_status in (getattr(network, "STAT_WRONG_PASSWORD", None),

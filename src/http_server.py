@@ -170,6 +170,13 @@ def _build_http_response(body):
     return header.encode('utf-8') + body_bytes
 
 
+def _build_text_response(body):
+    """Bygger ett enkelt textsvar för korta actions som reset."""
+    body_bytes = body.encode('utf-8')
+    header = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n".format(len(body_bytes))
+    return header.encode('utf-8') + body_bytes
+
+
 def _read_request(conn, max_attempts=20, wait_ms=5):
     """Läser HTTP-request non-blocking och avbryter så fort headern är komplett (bra för Nginx)."""
     request = b""
@@ -254,6 +261,12 @@ def handle_http_requests():
             elif '/led/toggle' in first_line:
                 led_control.toggle()
                 print("LED TOGGLE via HTTP/Proxy")
+            elif '/reset' in first_line:
+                print("Reset requested via HTTP/Proxy")
+                conn.sendall(_build_text_response("Resetting Pico..."))
+                sleep_ms(100)
+                machine.reset()
+                return
 
             response = _build_http_response(_render_html_body())
             conn.sendall(response)

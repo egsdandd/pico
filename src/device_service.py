@@ -21,11 +21,9 @@ from .mqtt_client import (
     ping as mqtt_ping,
 )
 from .time_sync import format_local_time, sync_ntp_utc_time
-from .wifi_manager import do_connect
+from .wifi_manager import do_connect, get_wifi_info
 from . import http_server
-
-
-def _connect_wifi():
+def _connect_wifi(log_success=False):
     """Ansluter till Wi-Fi med exponential backoff vid misslyckande."""
     print("Connecting to Wi-Fi...")
     max_attempts = wifi_connect_retries if wifi_connect_retries else 3
@@ -34,7 +32,12 @@ def _connect_wifi():
     for attempt in range(1, max_attempts + 1):
         try:
             if do_connect():
-                print("Wi-Fi connected!")
+                if log_success:
+                    wifi_info = get_wifi_info()
+                    if wifi_info:
+                        print("Wi-Fi connected:", wifi_info)
+                    else:
+                        print("Wi-Fi connected!")
                 return True
         except Exception as exc:
             print(f"Wi-Fi connect attempt {attempt} failed: {exc}")
@@ -231,7 +234,7 @@ def publish_sensor_data_loop(dht_sensor, mqtt_client):
 def run():
     """Programmets startpunkt."""
     # Säkerställ Wi-Fi och tid vid absolut första uppstart
-    while not _connect_wifi():
+    while not _connect_wifi(log_success=True):
         print("Initial Wi-Fi connection failed. Retrying in 30s...")
         sleep(30)
 
