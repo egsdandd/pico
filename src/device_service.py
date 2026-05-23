@@ -216,7 +216,10 @@ def publish_sensor_data_loop(dht_sensor, mqtt_client):
                     )
                     mqtt_client.publish(SENSOR_TOPIC, payload)
                     print(f"Published to {SENSOR_TOPIC}: {payload}")
-                    print(f"Local publish time: {packet_local_time}")
+                    print(
+                        f"Local publish time: {packet_local_time} - "
+                        f"Packet Time {packet_local_time} ({packet_timestamp})"
+                    )
                     last_publish_time = current_time
                 except Exception as exc:
                     print(f"MQTT publish failed: {exc}")

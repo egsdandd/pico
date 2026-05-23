@@ -2,7 +2,7 @@ import machine
 import ntptime
 import struct
 from . import config
-from time import localtime, mktime
+from time import localtime, mktime, sleep, time
 
 try:
     import usocket as socket
@@ -31,13 +31,49 @@ def sync_ntp_utc_time(timezone_offset=0):
         print("Synchronizing time with NTP server...")
         ntp_host = getattr(config, "ntp_host", None)
         ntp_timeout = getattr(config, "ntp_timeout", 3)
+        ntp_retries = getattr(config, "ntp_retries", 3)
+        ntp_retry_delay = getattr(config, "ntp_retry_delay", 1)
 
-        if ntp_host:
-            # Use explicit UDP NTP query with timeout to avoid blocking forever.
-            _set_time_via_udp_ntp(ntp_host, ntp_timeout)
-        else:
-            # Keep backward-compatible behavior if no host override is configured.
-            ntptime.settime()
+        candidate_hosts = []
+        configured_hosts = getattr(config, "ntp_hosts", None)
+        if configured_hosts:
+            for host in configured_hosts:
+                if host and host not in candidate_hosts:
+                    candidate_hosts.append(host)
+
+        if ntp_host and ntp_host not in candidate_hosts:
+            candidate_hosts.append(ntp_host)
+
+        default_hosts = ["pool.ntp.org", "time.google.com", "se.pool.ntp.org"]
+        for host in default_hosts:
+            if host not in candidate_hosts:
+                candidate_hosts.append(host)
+
+        last_error = None
+        synced = False
+        for _attempt in range(ntp_retries):
+            for host in candidate_hosts:
+                try:
+                    _set_time_via_udp_ntp(host, ntp_timeout)
+                    synced = True
+                    break
+                except Exception as exc:
+                    last_error = exc
+            if synced:
+                break
+            sleep(ntp_retry_delay)
+
+        if not synced:
+            # Backward-compatible last attempt via ntptime in case network stack handles this better.
+            try:
+                if ntp_host:
+                    ntptime.host = ntp_host
+                ntptime.settime()
+            except Exception as exc:
+                if last_error is None:
+                    last_error = exc
+                raise last_error
+
         rtc = machine.RTC()
         rtc_datetime = rtc.datetime()
         print(
@@ -62,7 +98,15 @@ def sync_ntp_utc_time(timezone_offset=0):
 
         return True
     except Exception as exc:
-        print("Failed to synchronize time:", exc)
+        current_epoch = int(time())
+        current_local = format_local_time(current_epoch, timezone_offset)
+        print(
+            "Failed to synchronize time at epoch {} (local {}): {}".format(
+                current_epoch,
+                current_local,
+                exc,
+            )
+        )
         return False
 
 
